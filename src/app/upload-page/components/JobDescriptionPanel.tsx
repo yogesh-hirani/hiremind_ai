@@ -84,46 +84,51 @@ export default function JobDescriptionPanel({ parsedFiles }: JobDescriptionPanel
         postedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
       };
 
-      // Parse each uploaded resume with Gemini, then score
-      const scoredCandidates = await Promise.all(
-        filesToAnalyze.map(async (resumeFile, idx) => {
-          const parsed = await parseResume(resumeFile.extractedText);
+      // Parse each uploaded resume with Gemini, then score — sequential to avoid Gemini 429 rate limits
+      const scoredCandidates: { candidate: ParsedCandidate; score: CandidateScore }[] = [];
+      for (let idx = 0; idx < filesToAnalyze.length; idx++) {
+        const resumeFile = filesToAnalyze[idx];
+        const parsed = await parseResume(resumeFile.extractedText);
 
-          const candidate: ParsedCandidate = {
-            id: `cand-${Date.now()}-${idx}`,
-            name: parsed.name || resumeFile.fileName.replace(/\.(pdf|docx|doc)$/i, ''),
-            email: parsed.email || '',
-            phone: parsed.phone || '',
-            totalExperience: parsed.totalExperience,
-            skills: parsed.skills,
-            workExperience: parsed.workExperience,
-            education: parsed.education,
-            projects: parsed.projects,
-            certifications: parsed.certifications,
-            resumeFileName: resumeFile.fileName,
-            parsedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
-          };
+        const candidate: ParsedCandidate = {
+          id: `cand-${Date.now()}-${idx}`,
+          name: parsed.name || resumeFile.fileName.replace(/\.(pdf|docx|doc)$/i, ''),
+          email: parsed.email || '',
+          phone: parsed.phone || '',
+          totalExperience: parsed.totalExperience,
+          skills: parsed.skills,
+          workExperience: parsed.workExperience,
+          education: parsed.education,
+          projects: parsed.projects,
+          certifications: parsed.certifications,
+          resumeFileName: resumeFile.fileName,
+          parsedAt: new Date().toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' }),
+        };
 
-          const scoringResult = await scoreCandidate(
-            candidate.name,
-            candidate.skills,
-            candidate.totalExperience,
-            candidate.workExperience.map((w) => `${w.role} at ${w.company} (${w.duration})`).join('; '),
-            jdResult.requiredSkills,
-            jdResult.preferredSkills,
-            jdResult.minimumExperience,
-            jdResult.title,
-            resumeFile.extractedText
-          );
+        const scoringResult = await scoreCandidate(
+          candidate.name,
+          candidate.skills,
+          candidate.totalExperience,
+          candidate.workExperience.map((w) => `${w.role} at ${w.company} (${w.duration})`).join('; '),
+          jdResult.requiredSkills,
+          jdResult.preferredSkills,
+          jdResult.minimumExperience,
+          jdResult.title,
+          resumeFile.extractedText
+        );
 
-          const score: CandidateScore = {
-            candidateId: candidate.id,
-            ...scoringResult,
-          };
+        const score: CandidateScore = {
+          candidateId: candidate.id,
+          ...scoringResult,
+        };
 
-          return { candidate, score };
-        })
-      );
+        scoredCandidates.push({ candidate, score });
+
+        // Small delay between candidates to respect Gemini rate limits
+        if (idx < filesToAnalyze.length - 1) {
+          await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+      }
 
       saveSession(job, scoredCandidates);
 
