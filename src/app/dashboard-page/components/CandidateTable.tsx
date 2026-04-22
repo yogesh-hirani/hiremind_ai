@@ -634,7 +634,6 @@ export default function CandidateTable() {
                           <td className="px-4 py-3 min-w-[110px]">
                             <div className="flex items-center gap-1.5">
                               <ScoreBar value={sc.score.finalScore} />
-                              <ConfidenceBadge level={sc.score.confidenceLevel} />
                             </div>
                           </td>
                           <td className="px-4 py-3">

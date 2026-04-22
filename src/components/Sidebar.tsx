@@ -15,8 +15,9 @@ import {
   Sparkles,
   LogOut,
 } from 'lucide-react';
-import Icon from '@/components/ui/AppIcon';
 import { useAuth } from '@/contexts/AuthContext';
+import Icon from '@/components/ui/AppIcon';
+
 
 
 interface NavItem {

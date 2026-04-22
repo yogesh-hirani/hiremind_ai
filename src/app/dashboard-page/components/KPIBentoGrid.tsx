@@ -6,6 +6,7 @@ import { getScoredCandidates } from '@/lib/mockData';
 import Icon from '@/components/ui/AppIcon';
 
 
+
 export default function KPIBentoGrid() {
   const [mounted, setMounted] = useState(false);
 
