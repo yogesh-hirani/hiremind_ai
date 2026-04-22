@@ -49,8 +49,13 @@ export default function JobDescriptionPanel({ parsedFiles }: JobDescriptionPanel
       setExtractedTitle(result.title);
       setIsExtracted(true);
       toast.success('Job requirements extracted successfully with Gemini AI.');
-    } catch {
-      toast.error('Failed to extract requirements. Please try again.');
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('RATE_LIMIT') || errMsg.includes('429') || errMsg.includes('quota')) {
+        toast.error('Gemini API rate limit reached. Please wait 30–60 seconds and try again.');
+      } else {
+        toast.error('Failed to extract requirements. Please try again.');
+      }
     } finally {
       setIsAnalyzing(false);
     }
@@ -134,8 +139,13 @@ export default function JobDescriptionPanel({ parsedFiles }: JobDescriptionPanel
 
       toast.success(`Analysis complete — ${filesToAnalyze.length} candidate${filesToAnalyze.length > 1 ? 's' : ''} scored and ranked with Gemini AI.`);
       router.push('/dashboard-page');
-    } catch {
-      toast.error('Analysis failed. Please try again.');
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      if (errMsg.includes('RATE_LIMIT') || errMsg.includes('429') || errMsg.includes('quota')) {
+        toast.error('Gemini API rate limit reached. Please wait 30–60 seconds and try again.');
+      } else {
+        toast.error('Analysis failed. Please try again.');
+      }
     } finally {
       setIsSubmitting(false);
     }
