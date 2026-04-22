@@ -1,53 +1,69 @@
 import { getChatCompletion } from './chatCompletion';
 
 const PROVIDER = 'GEMINI';
-const MODEL = 'gemini/gemini-2.0-flash';
+const PRIMARY_MODEL = 'gemini/gemini-2.0-flash-lite';
+const FALLBACK_MODEL = 'gemini/gemini-1.5-flash';
+const MODEL = PRIMARY_MODEL;
 const TEMPERATURE = 0.2;
 
 // Delay helper
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function callGeminiWithRetry(messages: { role: string; content: string }[], maxRetries = 3): Promise<string> {
-  const attempt = async (): Promise<string> => {
-    const response = await getChatCompletion(PROVIDER, MODEL, messages, {
+async function callGeminiWithRetry(messages: { role: string; content: string }[], maxRetries = 5): Promise<string> {
+  const attempt = async (model: string): Promise<string> => {
+    const response = await getChatCompletion(PROVIDER, model, messages, {
       temperature: TEMPERATURE,
       max_tokens: 2048,
     });
     return response.choices[0].message.content || '';
   };
 
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const raw = await attempt();
-      JSON.parse(extractJSON(raw)); // validate JSON
-      return raw;
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const isRateLimit =
-        errMsg.includes('429') ||
-        errMsg.includes('RESOURCE_EXHAUSTED') ||
-        errMsg.includes('RateLimitError') ||
-        errMsg.includes('quota');
+  // Try primary model first, then fallback model
+  const modelsToTry = [PRIMARY_MODEL, FALLBACK_MODEL];
 
-      if (isRateLimit) {
-        if (i < maxRetries - 1) {
-          // Exponential backoff with jitter: 2s, 4s, 8s + up to 1s jitter
-          const backoff = Math.pow(2, i + 1) * 1000 + Math.random() * 1000;
-          await delay(backoff);
-          continue;
+  for (const currentModel of modelsToTry) {
+    let lastError: unknown = null;
+
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const raw = await attempt(currentModel);
+        extractJSON(raw); // validate extractable JSON
+        return raw;
+      } catch (err: unknown) {
+        lastError = err;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isRateLimit =
+          errMsg.includes('429') ||
+          errMsg.includes('RESOURCE_EXHAUSTED') ||
+          errMsg.includes('RateLimitError') ||
+          errMsg.includes('quota');
+
+        if (isRateLimit) {
+          if (i < maxRetries - 1) {
+            // Exponential backoff starting at 30s to respect API retry hint
+            const backoff = Math.pow(2, i) * 30000 + Math.random() * 5000;
+            await delay(backoff);
+            continue;
+          }
+          // Exhausted retries on this model — break inner loop and try fallback
+          break;
         }
-        // Exhausted retries on rate limit — propagate
-        throw err;
-      }
 
-      // Non-rate-limit error: retry once more, then throw
-      if (i === maxRetries - 1) {
-        throw new Error('Gemini returned invalid JSON after retries');
+        // Non-rate-limit error: retry once more, then throw
+        if (i === maxRetries - 1) {
+          throw new Error('Gemini returned invalid JSON after retries');
+        }
       }
     }
+
+    // If we're on the last model and still failing, throw
+    if (currentModel === FALLBACK_MODEL) {
+      throw new Error('RATE_LIMIT_EXHAUSTED: All Gemini models quota exceeded. Please wait a few minutes and try again.');
+    }
+    // Otherwise try next model
   }
 
-  throw new Error('Gemini call failed after all retries');
+  throw new Error('RATE_LIMIT_EXHAUSTED: All Gemini models quota exceeded.');
 }
 
 function extractJSON(text: string): string {
@@ -232,14 +248,14 @@ ${jdText}`,
     return JSON.parse(extractJSON(raw)) as JDAnalysisResult;
   } catch (err: unknown) {
     const errMsg = err instanceof Error ? err.message : String(err);
-    if (errMsg.includes('429') || errMsg.includes('RESOURCE_EXHAUSTED') || errMsg.includes('RateLimitError') || errMsg.includes('quota')) {
-      return {
-        title: '',
-        requiredSkills: [],
-        preferredSkills: [],
-        minimumExperience: 0,
-        roleType: '',
-      };
+    if (
+      errMsg.includes('429') ||
+      errMsg.includes('RESOURCE_EXHAUSTED') ||
+      errMsg.includes('RateLimitError') ||
+      errMsg.includes('quota') ||
+      errMsg.includes('RATE_LIMIT_EXHAUSTED')
+    ) {
+      throw new Error('RATE_LIMIT: Gemini API quota exceeded. Please wait a moment and try again.');
     }
     throw new Error('Failed to analyze job description with Gemini');
   }
