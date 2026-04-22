@@ -1,56 +1,69 @@
 import { getChatCompletion } from './chatCompletion';
 
 const PROVIDER = 'GEMINI';
-const MODEL = 'gemini/gemini-2.0-flash';
+const PRIMARY_MODEL = 'gemini/gemini-2.0-flash-lite';
+const FALLBACK_MODEL = 'gemini/gemini-1.5-flash';
+const MODEL = PRIMARY_MODEL;
 const TEMPERATURE = 0.2;
 
 // Delay helper
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function callGeminiWithRetry(messages: { role: string; content: string }[], maxRetries = 5): Promise<string> {
-  const attempt = async (): Promise<string> => {
-    const response = await getChatCompletion(PROVIDER, MODEL, messages, {
+  const attempt = async (model: string): Promise<string> => {
+    const response = await getChatCompletion(PROVIDER, model, messages, {
       temperature: TEMPERATURE,
       max_tokens: 2048,
     });
     return response.choices[0].message.content || '';
   };
 
-  let lastError: unknown = null;
+  // Try primary model first, then fallback model
+  const modelsToTry = [PRIMARY_MODEL, FALLBACK_MODEL];
 
-  for (let i = 0; i < maxRetries; i++) {
-    try {
-      const raw = await attempt();
-      extractJSON(raw); // validate extractable JSON
-      return raw;
-    } catch (err: unknown) {
-      lastError = err;
-      const errMsg = err instanceof Error ? err.message : String(err);
-      const isRateLimit =
-        errMsg.includes('429') ||
-        errMsg.includes('RESOURCE_EXHAUSTED') ||
-        errMsg.includes('RateLimitError') ||
-        errMsg.includes('quota');
+  for (const currentModel of modelsToTry) {
+    let lastError: unknown = null;
 
-      if (isRateLimit) {
-        if (i < maxRetries - 1) {
-          // Exponential backoff: 3s, 6s, 12s, 24s, 48s + up to 2s jitter
-          const backoff = Math.pow(2, i + 1) * 1500 + Math.random() * 2000;
-          await delay(backoff);
-          continue;
+    for (let i = 0; i < maxRetries; i++) {
+      try {
+        const raw = await attempt(currentModel);
+        extractJSON(raw); // validate extractable JSON
+        return raw;
+      } catch (err: unknown) {
+        lastError = err;
+        const errMsg = err instanceof Error ? err.message : String(err);
+        const isRateLimit =
+          errMsg.includes('429') ||
+          errMsg.includes('RESOURCE_EXHAUSTED') ||
+          errMsg.includes('RateLimitError') ||
+          errMsg.includes('quota');
+
+        if (isRateLimit) {
+          if (i < maxRetries - 1) {
+            // Exponential backoff starting at 30s to respect API retry hint
+            const backoff = Math.pow(2, i) * 30000 + Math.random() * 5000;
+            await delay(backoff);
+            continue;
+          }
+          // Exhausted retries on this model — break inner loop and try fallback
+          break;
         }
-        // Exhausted retries on rate limit — throw with clear message
-        throw new Error('RATE_LIMIT_EXHAUSTED: ' + errMsg);
-      }
 
-      // Non-rate-limit error: retry once more, then throw
-      if (i === maxRetries - 1) {
-        throw new Error('Gemini returned invalid JSON after retries');
+        // Non-rate-limit error: retry once more, then throw
+        if (i === maxRetries - 1) {
+          throw new Error('Gemini returned invalid JSON after retries');
+        }
       }
     }
+
+    // If we're on the last model and still failing, throw
+    if (currentModel === FALLBACK_MODEL) {
+      throw new Error('RATE_LIMIT_EXHAUSTED: All Gemini models quota exceeded. Please wait a few minutes and try again.');
+    }
+    // Otherwise try next model
   }
 
-  throw lastError || new Error('Gemini call failed after all retries');
+  throw new Error('RATE_LIMIT_EXHAUSTED: All Gemini models quota exceeded.');
 }
 
 function extractJSON(text: string): string {
